@@ -1,12 +1,14 @@
-import express from 'express';
 import Database from 'better-sqlite3';
+import express from 'express';
 
 const app = express();
 
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  return res.status(200).send({'message': 'SHIPTIVITY API. Read documentation to see API docs'});
+  return res.status(200).send({
+    'message': 'SHIPTIVITY API. Read documentation to see API docs'
+  });
 });
 
 // We are keeping one connection alive for the rest of the life application for simplicity
@@ -26,8 +28,8 @@ const validateId = (id) => {
     return {
       valid: false,
       messageObj: {
-      'message': 'Invalid id provided.',
-      'long_message': 'Id can only be integer.',
+        'message': 'Invalid id provided.',
+        'long_message': 'Id can only be integer.',
       },
     };
   }
@@ -36,8 +38,8 @@ const validateId = (id) => {
     return {
       valid: false,
       messageObj: {
-      'message': 'Invalid id provided.',
-      'long_message': 'Cannot find client with that id.',
+        'message': 'Invalid id provided.',
+        'long_message': 'Cannot find client with that id.',
       },
     };
   }
@@ -55,8 +57,8 @@ const validatePriority = (priority) => {
     return {
       valid: false,
       messageObj: {
-      'message': 'Invalid priority provided.',
-      'long_message': 'Priority can only be positive integer.',
+        'message': 'Invalid priority provided.',
+        'long_message': 'Priority can only be positive integer.',
       },
     };
   }
@@ -92,8 +94,11 @@ app.get('/api/v1/clients', (req, res) => {
  * GET /api/v1/clients/{client_id} - get client by id
  */
 app.get('/api/v1/clients/:id', (req, res) => {
-  const id = parseInt(req.params.id , 10);
-  const { valid, messageObj } = validateId(id);
+  const id = parseInt(req.params.id, 10);
+  const {
+    valid,
+    messageObj
+  } = validateId(id);
   if (!valid) {
     res.status(400).send(messageObj);
   }
@@ -115,18 +120,73 @@ app.get('/api/v1/clients/:id', (req, res) => {
  *
  */
 app.put('/api/v1/clients/:id', (req, res) => {
-  const id = parseInt(req.params.id , 10);
-  const { valid, messageObj } = validateId(id);
+  const id = parseInt(req.params.id, 10);
+  const {
+    valid,
+    messageObj
+  } = validateId(id);
   if (!valid) {
     res.status(400).send(messageObj);
   }
 
-  let { status, priority } = req.body;
+  let {
+    status,
+    priority
+  } = req.body;
   let clients = db.prepare('select * from clients').all();
   const client = clients.find(client => client.id === id);
 
   /* ---------- Update code below ----------*/
+  if (priority) {
+    const cli = db.prepare('select * from clients where status = ? and priority = ? limit 1').get([status, priority]);
 
+    if (!cli) { //priority doesn't exist yet
+      const stmt = db.prepare('update clients set priority = ? where id = ?')
+      stmt.run([priority, client.id])
+    } else if (status === client.status) { //same swimlane
+      if (priority < client.priority) {
+        const increment = db.prepare('update clients set priority = priority + 1 where priority >= ? and priority < ?')
+        increment.run([priority, client.priority, ])
+      } else if (priority > client.priority) {
+        const decrement = db.prepare('update clients set priority = priority - 1 where priority <= ? and priority > ?')
+        decrement.run([priority, client.priority])
+      }
+      const stmt = db.prepare('update clients set priority = ? where id = ?')
+      stmt.run([priority, client.id])
+
+    } else { //moving to different swimlane
+      //take sibling priority and increment all above
+      const increment = db.prepare('update clients set priority = priority + 1 where priority >= ? and status = ?')
+      increment.run([priority, status])
+
+      //decrement all priorities above client.priority
+      const decrement = db.prepare('update clients set priority = priority - 1 where priority > ? and status = ?')
+      decrement.run([client.priority, client.status])
+
+      const takeSib = db.prepare('update clients set priority = ? where id = ?')
+      takeSib.run([priority, client.id])
+    }
+  } else {
+    const max = db.prepare('select * from clients where priority= 1 + (select max(priority) from clients where status = ?)').get([status])
+    const setMax = db.prepare('update clients set priority = ? where id = ?')
+
+    //decrement all priorities above client.priority
+    const decrement = db.prepare('update clients set priority = priority - 1 where priority > ? and status = ?')
+    decrement.run([client.priority, client.status])
+
+    if (max) {
+      setMax.run([max.priority, client.id])
+    } else {
+      setMax.run([1, client.id])
+    }
+  }
+
+  if (status) {
+    const stmt = db.prepare('update clients set status = ? where id = ?')
+    stmt.run([status, client.id])
+  }
+
+  // End
 
 
   return res.status(200).send(clients);
